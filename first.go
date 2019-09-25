@@ -12,30 +12,35 @@ import (
 	"github.com/faiface/pixel/pixelgl"
 )
 
-var totalLifeTime, totalDrawTime time.Duration
+type Vec2 struct {
+	x int
+	y int
+}
+
 var lifeCount, drawCount int64
+var totalLifeTime, totalDrawTime time.Duration
 
 var fps, turn_rate int
-var frames_per_turn float64
-var rows, cols int
-var grid, buff []bool
-var diff, all []uint32
+var width, height int
 var window *pixelgl.Window
 var picture *pixel.PictureData
-var width, height int
+
+var rows, cols int
+var grid, buff []bool
+var diff, all []Vec2
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	flag.IntVar(&fps, "fps", 60, "frames per second")
-	flag.IntVar(&rows, "rows", 36, "number of rows")
-	flag.IntVar(&cols, "cols", 64, "number of columns")
+	flag.IntVar(&rows, "rows", 100, "number of rows")
+	flag.IntVar(&cols, "cols", 100, "number of columns")
 	flag.IntVar(&turn_rate, "rate", 12, "turn rate")
 	flag.Parse()
 	pixelgl.Run(run)
 }
 
 func run() {
-	width, height := pixelgl.PrimaryMonitor().Size()
+	monitor_width, monitor_height := pixelgl.PrimaryMonitor().Size()
 	win, err := pixelgl.NewWindow(pixelgl.WindowConfig{
 		Title:     "Life (" + strconv.Itoa(fps) + " FPS)",
 		Bounds:    pixel.R(0, 0, 1000, 1000),
@@ -48,7 +53,7 @@ func run() {
 	window.SetPos(pixel.Vec{1, 31})
 	picture = pixel.MakePictureData(window.Bounds())
 
-	fmt.Printf("monitor=%dx%d\n", int(width), int(height))
+	fmt.Printf("monitor=%dx%d\n", int(monitor_width), int(monitor_height))
 	fmt.Printf("fps=%d\n", fps)
 	fmt.Printf("rate=%d\n", turn_rate)
 	fmt.Printf("grid=%dx%d\n", rows, cols)
@@ -62,10 +67,15 @@ func run() {
 	grid = make([]bool, rows*cols)
 	buff = make([]bool, rows*cols)
 
-	diff = make([]uint32, 0, rows*cols)
-	all = make([]uint32, rows*cols)
-	for i := range all {
-		all[i] = uint32(i)
+	diff = make([]Vec2, 0, rows*cols)
+	all = make([]Vec2, rows*cols)
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			all[r*cols+c] = Vec2{
+				x: c,
+				y: r,
+			}
+		}
 	}
 
 	init_grid()
@@ -73,17 +83,20 @@ func run() {
 	frame := 0
 	last := time.Now()
 	for now := range time.Tick(time.Second / time.Duration(fps)) {
-		if frame % fps == fps - 1 {
-			curr_fps := float64(fps) * float64(time.Second) / float64(now.Sub(last))
-			last = now
-			window.SetTitle("Life (" + strconv.FormatFloat(curr_fps, 'f', 2, 64) + " FPS)")
+		if frame == 10*fps {
+			window.Destroy()
+			break
 		}
-
 		if window.Closed() {
 			break
 		}
 		if window.JustPressed(pixelgl.KeySpace) {
 			init_grid()
+		}
+		if frame%fps == fps-1 {
+			curr_fps := float64(fps) * float64(time.Second) / float64(now.Sub(last))
+			last = now
+			window.SetTitle("Life (" + strconv.FormatFloat(curr_fps, 'f', 2, 64) + " FPS)")
 		}
 
 		window.Update()
@@ -92,21 +105,26 @@ func run() {
 			turn()
 		}
 		// fmt.Printf("Frame %d\n", frame)
-		draw(frame % fps)
+		draw(frame)
 
 		frame++
 	}
 	// fmt.Printf("Avg life time %s\n", time.Duration(totalLifeTime.Nanoseconds()/lifeCount))
-	// fmt.Printf("Avg draw time %s\n", time.Duration(totalDrawTime.Nanoseconds()/drawCount))
+	fmt.Printf("Avg draw time %s\n", time.Duration(totalDrawTime.Nanoseconds()/drawCount))
 }
 
 func init_grid() {
 	diff = diff[:0]
-	for i := range grid {
-		// grid[i] = byte(rand.Intn(3)) % 2
-		grid[i] = rand.Intn(3)%2 == 0
-		if grid[i] {
-			diff = append(diff, uint32(i))
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			is_alive := rand.Intn(3) == 0
+			grid[r*cols+c] = is_alive
+			if is_alive {
+				diff = append(diff, Vec2{
+					x: c,
+					y: r,
+				})
+			}
 		}
 	}
 }
@@ -120,6 +138,7 @@ func turn() {
 	// }(time.Now())
 
 	diff = diff[:0]
+
 	for r := 0; r < rows; r++ {
 		for c := 0; c < cols; c++ {
 			var r_up, r_down, c_right, c_left int
@@ -146,7 +165,7 @@ func turn() {
 
 			r_up = r_up * cols
 			r_down = r_down * cols
-			rr := r * cols
+			r_same := r * cols
 
 			var living_neighbors byte
 			if grid[r_up+c] {
@@ -155,7 +174,7 @@ func turn() {
 			if grid[r_up+c_right] {
 				living_neighbors++
 			}
-			if grid[rr+c_right] {
+			if grid[r_same+c_right] {
 				living_neighbors++
 			}
 			if grid[r_down+c_right] {
@@ -167,19 +186,22 @@ func turn() {
 			if grid[r_down+c_left] {
 				living_neighbors++
 			}
-			if grid[rr+c_left] {
+			if grid[r_same+c_left] {
 				living_neighbors++
 			}
 			if grid[r_up+c_left] {
 				living_neighbors++
 			}
 
-			i := rr + c
-			// fmt.Printf("%d changed\n", i)
+			// fmt.Printf("%d,%d changed\n", r, c)
+			i := r*cols + c
 			if grid[i] {
 				if living_neighbors < 2 {
 					buff[i] = false
-					diff = append(diff, uint32(i))
+					diff = append(diff, Vec2{
+						x: c,
+						y: r,
+					})
 				} else if living_neighbors < 4 {
 					buff[i] = true
 					// if grid[i] != 7 {
@@ -189,28 +211,35 @@ func turn() {
 					// }
 				} else {
 					buff[i] = false
-					diff = append(diff, uint32(i))
+					diff = append(diff, Vec2{
+						x: c,
+						y: r,
+					})
 				}
 			} else {
 				if living_neighbors == 3 {
 					buff[i] = true
-					diff = append(diff, uint32(i))
+					diff = append(diff, Vec2{
+						x: c,
+						y: r,
+					})
 				} else {
 					buff[i] = false
 				}
 			}
 		}
 	}
+
 	grid, buff = buff, grid
 }
 
 func draw(frame int) {
-	// defer func(start time.Time) {
-	// 	drawCount++
-	// 	elapsed := time.Since(start)
-	// 	totalDrawTime += elapsed
-	// 	// fmt.Printf("draw time %s\n", elapsed)
-	// }(time.Now())
+	defer func(start time.Time) {
+		drawCount++
+		elapsed := time.Since(start)
+		totalDrawTime += elapsed
+		// fmt.Printf("draw time %s\n", elapsed)
+	}(time.Now())
 
 	cells := diff
 
@@ -233,10 +262,29 @@ func draw(frame int) {
 	// fmt.Printf("h_rem=%d w_rem=%d\n", h_rem, w_rem)
 	// fmt.Printf("%dpx\n", (int(width) - w_rem) * (int(height) - h_rem))
 
-	for _, i := range cells {
-		r := int(i) / cols
-		c := int(i) % cols
-		// fmt.Printf("diff[%d] = (%d, %d)\n", i, r, c)
+	// animate_turn := float64(frame%turn_rate) / float64(turn_rate)
+	// fmt.Printf("frame %d, %f%%\n", frame, animate_turn)
+	// cell_color := chartreuse
+	// alive_color := color.RGBA{
+	// 	R: uint8(float64(cell_color.R) * animate_turn),
+	// 	G: uint8(float64(cell_color.G) * animate_turn),
+	// 	B: uint8(float64(cell_color.B) * animate_turn),
+	// 	A: 255,
+	// }
+	// dead_color := color.RGBA{
+	// 	R: uint8(float64(cell_color.R) * (1.0 - animate_turn)),
+	// 	G: uint8(float64(cell_color.G) * (1.0 - animate_turn)),
+	// 	B: uint8(float64(cell_color.B) * (1.0 - animate_turn)),
+	// 	A: 255,
+	// }
+
+	alive_color := chartreuse
+	dead_color := black
+
+	for _, cell := range cells {
+		r := cell.y
+		c := cell.x
+		// fmt.Printf("cells[%d] = (%d, %d)\n", i, r, c)
 
 		var r_start_extra, r_end_extra, c_start_extra, c_end_extra int
 		if r < h_rem {
@@ -261,7 +309,7 @@ func draw(frame int) {
 		// fmt.Printf("col(%d) %d-%d\n", c, c_start, c_end)
 
 		var color color.RGBA
-		if grid[i] {
+		if grid[r*cols + c] {
 			color = alive_color
 		} else {
 			color = dead_color
@@ -277,14 +325,14 @@ func draw(frame int) {
 	sprite.Draw(window, pixel.IM.Moved(window.Bounds().Center()))
 }
 
-var alive_color color.RGBA = color.RGBA{
+var chartreuse color.RGBA = color.RGBA{
 	R: 128,
 	G: 255,
 	B: 0,
 	A: 255,
 }
 
-var dead_color color.RGBA = color.RGBA{
+var black color.RGBA = color.RGBA{
 	R: 0,
 	G: 0,
 	B: 0,
