@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"math/rand"
+	"math"
 	"strconv"
 	"time"
 
@@ -37,6 +38,10 @@ func main() {
 	flag.IntVar(&turn_rate, "rate", 12, "turn rate")
 	flag.Parse()
 	pixelgl.Run(run)
+}
+
+func logistic_function(x, k float64) float64 {
+	return 1.0 / (1.0 - math.Exp(-k * (x - 0.5)))
 }
 
 func run() {
@@ -83,16 +88,19 @@ func run() {
 	frame := 0
 	last := time.Now()
 	for now := range time.Tick(time.Second / time.Duration(fps)) {
-		if frame == 10*fps {
-			window.Destroy()
-			break
-		}
+		// if frame == 10*fps {
+		// 	window.Destroy()
+		// 	break
+		// }
+
 		if window.Closed() {
 			break
 		}
+
 		if window.JustPressed(pixelgl.KeySpace) {
 			init_grid()
 		}
+
 		if frame%fps == fps-1 {
 			curr_fps := float64(fps) * float64(time.Second) / float64(now.Sub(last))
 			last = now
@@ -100,17 +108,17 @@ func run() {
 		}
 
 		window.Update()
+
 		if frame%fps%turn_rate == 0 {
-			// fmt.Printf("Turning\n")
+			fmt.Printf("Turning\n")
 			turn()
 		}
-		// fmt.Printf("Frame %d\n", frame)
+		
 		draw(frame)
-
 		frame++
 	}
-	// fmt.Printf("Avg life time %s\n", time.Duration(totalLifeTime.Nanoseconds()/lifeCount))
-	fmt.Printf("Avg draw time %s\n", time.Duration(totalDrawTime.Nanoseconds()/drawCount))
+	// fmt.Printf("\nAvg life time %s\n", time.Duration(totalLifeTime.Nanoseconds()/lifeCount))
+	fmt.Printf("\nAvg draw time %s\n", time.Duration(totalDrawTime.Nanoseconds()/drawCount))
 }
 
 func init_grid() {
@@ -262,8 +270,20 @@ func draw(frame int) {
 	// fmt.Printf("h_rem=%d w_rem=%d\n", h_rem, w_rem)
 	// fmt.Printf("%dpx\n", (int(width) - w_rem) * (int(height) - h_rem))
 
-	// animate_turn := float64(frame%turn_rate) / float64(turn_rate)
-	// fmt.Printf("frame %d, %f%%\n", frame, animate_turn)
+	alive_color := chartreuse
+	dead_color := black
+
+	// animate_turn := float64(frame%turn_rate) / float64(turn_rate - 1)
+	// animate_turn = math.Pow(animate_turn, 2.0)
+	// animate_turn = math.Pow(1.442695 * math.Log(animate_turn + 1), 0.25)
+	// animate_turn = math.Exp(animate_turn) / (math.Exp(animate_turn) + 1)
+	// if animate_turn < 0.5 {
+		// animate_turn = 2.0 * math.Pow(animate_turn, 2.0)
+	// } else {
+	// 	animate_turn = -2.0 * math.Pow(animate_turn-1.0, 2.0) + 1.0
+	// }
+	// fmt.Printf("\nframe %d, %f%%\n", frame, animate_turn*100)
+
 	// cell_color := chartreuse
 	// alive_color := color.RGBA{
 	// 	R: uint8(float64(cell_color.R) * animate_turn),
@@ -277,9 +297,8 @@ func draw(frame int) {
 	// 	B: uint8(float64(cell_color.B) * (1.0 - animate_turn)),
 	// 	A: 255,
 	// }
-
-	alive_color := chartreuse
-	dead_color := black
+	// fmt.Printf("alive_color=(%d,%d,%d,%d)\n", alive_color.R, alive_color.G, alive_color.B, alive_color.A)
+	// fmt.Printf("dead_color =(%d,%d,%d,%d)\n", dead_color.R, dead_color.G, dead_color.B, dead_color.A)
 
 	for _, cell := range cells {
 		r := cell.y
