@@ -54,7 +54,6 @@ func run() {
 
 	rowTriangles := make([]*pixel.TrianglesData, rows)
 	for i := range rowTriangles {
-		fmt.Printf("row %d\n", i)
 		rowTriangles[i] = pixel.MakeTrianglesData(2 * 3 * cols)
 		triangles := *rowTriangles[i]
 
@@ -62,29 +61,25 @@ func run() {
 			X: 0,
 			Y: float64(i) * row_height,
 		}
-		fmt.Printf("vert0 = %v\n", triangles[0].Position)
 		triangles[1].Position = pixel.Vec{
 			X: 0,
 			Y: float64(i+1) * row_height,
 		}
 		triangles[3].Position = triangles[1].Position
-		fmt.Printf("vert1/3=%v\n", triangles[3].Position)
 
 		for j := 0; j < cols-1; j++ {
 			lower_vertex := pixel.Vec{
 				X: float64(j+1) * col_width,
-				Y: float64(j) * row_height,
+				Y: float64(i) * row_height,
 			}
-			fmt.Printf("vert %d/%d/%d = %v\n", 6*j+2, 6*j+4, 6*j+6, lower_vertex)
 			triangles[6*j+2].Position = lower_vertex
 			triangles[6*j+4].Position = lower_vertex
 			triangles[6*j+6].Position = lower_vertex
 
 			upper_vertex := pixel.Vec{
 				X: float64(j+1) * col_width,
-				Y: float64(j+1) * row_height,
+				Y: float64(i+1) * row_height,
 			}
-			fmt.Printf("vert %d/%d/%d = %v\n", 6*j+5, 6*j+7, 6*j+9, upper_vertex)
 			triangles[6*j+5].Position = upper_vertex
 			triangles[6*j+7].Position = upper_vertex
 			triangles[6*j+9].Position = upper_vertex
@@ -94,14 +89,11 @@ func run() {
 			X: width,
 			Y: float64(i) * row_height,
 		}
-		triangles[len(triangles)-3].Position = triangles[len(triangles)-4].Position
+		triangles[len(triangles)-2].Position = triangles[len(triangles)-4].Position
 		triangles[len(triangles)-1].Position = pixel.Vec{
 			X: width,
 			Y: float64(i+1) * row_height,
 		}
-		fmt.Printf("vert38/40%v\n", triangles[len(triangles)-3].Position)
-		fmt.Printf("vert41=%v\n", triangles[len(triangles)-1].Position)
-		fmt.Println()
 	}
 
 	for row := 0; row < rows; row++ {
@@ -119,15 +111,9 @@ func run() {
 		}
 	}
 
-	for i := range rowTriangles {
-		fmt.Printf("\nrow %d\n", i)
-		triangles := *rowTriangles[i]
-		for j := 0; j < len(triangles); j++ {
-			fmt.Printf("vert %d\t= %v\n", j, triangles[j].Color)
-		}
+	for _, triangles := range rowTriangles {
+		win.MakeTriangles(triangles).Draw()
 	}
-
-	// TODO: Draw set of triangles
 
 	for !win.Closed() {
 		win.Update()
