@@ -271,14 +271,16 @@ func draw(frame int) {
 		c_start := int(col_w * float64(col))
 		c_end := int(col_w * float64(col+1))
 
-		is_alive := grid[row*cols+col]
+		var cell_color color.RGBA
+		if grid[row*cols+col] {
+			cell_color = alive_color
+		} else {
+			cell_color = dead_color
+		}
+
 		for y := r_start; y < r_end; y++ {
 			for x := c_start; x < c_end; x++ {
-				if is_alive {
-					picture.Pix[y*picture.Stride+x] = alive_color
-				} else {
-					picture.Pix[y*picture.Stride+x] = dead_color
-				}
+				picture.Pix[y*picture.Stride+x] = cell_color
 			}
 		}
 	}
