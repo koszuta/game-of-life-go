@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"image/color"
+	"math"
 	"math/rand"
 	"strconv"
 	"time"
@@ -12,41 +12,40 @@ import (
 	"github.com/faiface/pixel/pixelgl"
 )
 
-type Vec2 struct {
-	x int
-	y int
-}
-
 var (
-	lifeCount, drawCount         int64
-	totalLifeTime, totalDrawTime time.Duration
+	turns, draws, resizes                               int64
+	total_turn_time, total_draw_time, total_resize_time time.Duration
 
-	fps, turn_rate int
-	width, height  int
-	window         *pixelgl.Window
-	picture        *pixel.PictureData
+	turn_rate             int
+	window                *pixelgl.Window
+	win_width, win_height float64
 
-	rows, cols int
-	grid, buff []bool
-	diff, all  []Vec2
+	rows, cols                    int
+	grid, buff, diff              []bool
+	verts_per_cell, verts_per_row int
+	triangles                     pixel.TrianglesData
+	batch                         *pixel.Batch
+
+	alive_colors, dead_colors []pixel.RGBA
 )
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	flag.IntVar(&fps, "fps", 60, "frames per second")
 	flag.IntVar(&rows, "rows", 100, "number of rows")
 	flag.IntVar(&cols, "cols", 100, "number of columns")
-	flag.IntVar(&turn_rate, "rate", 12, "turn rate")
+	flag.IntVar(&turn_rate, "rate", 12, "turns per second")
 	flag.Parse()
 	pixelgl.Run(run)
 }
 
 func run() {
 	monitor_width, monitor_height := pixelgl.PrimaryMonitor().Size()
+	refresh_rate := pixelgl.PrimaryMonitor().RefreshRate()
 	win, err := pixelgl.NewWindow(pixelgl.WindowConfig{
-		Title:     "Life (" + strconv.Itoa(fps) + " FPS)",
+		Title:     "Life (" + strconv.FormatFloat(refresh_rate, 'f', 2, 64) + " FPS)",
 		Bounds:    pixel.R(0, 0, 1000, 1000),
 		Resizable: true,
+		VSync:     true,
 	})
 	if err != nil {
 		panic(err)
@@ -54,46 +53,46 @@ func run() {
 	window = win
 	window.SetPos(pixel.Vec{
 		X: 1,
-		Y: 31,
+		Y: 26,
 	})
-	picture = pixel.MakePictureData(window.Bounds())
 
-	fmt.Printf("monitor=%dx%d\n", int(monitor_width), int(monitor_height))
-	fmt.Printf("fps=%d\n", fps)
-	fmt.Printf("rate=%d\n", turn_rate)
-	fmt.Printf("grid=%dx%d\n", rows, cols)
-
-	if turn_rate > fps {
-		turn_rate = 1
-	} else {
-		turn_rate = int(fps / turn_rate)
+	if window.VSync() && turn_rate > int(refresh_rate) {
+		turn_rate = int(refresh_rate)
 	}
 
 	grid = make([]bool, rows*cols)
 	buff = make([]bool, rows*cols)
-
-	diff = make([]Vec2, 0, rows*cols)
-	all = make([]Vec2, rows*cols)
-	for r := 0; r < rows; r++ {
-		for c := 0; c < cols; c++ {
-			all[r*cols+c] = Vec2{
-				x: c,
-				y: r,
-			}
-		}
-	}
-
+	diff = make([]bool, rows*cols)
 	init_grid()
 
-	frame := 0
-	last := time.Now()
-	for now := range time.Tick(time.Second / time.Duration(fps)) {
-		// if frame == 10*fps {
-		// 	window.Destroy()
-		// 	break
-		// }
+	verts_per_cell = 2 * 3
+	verts_per_row = verts_per_cell * cols
+	triangles = make(pixel.TrianglesData, verts_per_row*rows)
+	batch = pixel.NewBatch(&triangles, nil)
 
-		if window.Closed() {
+	fmt.Printf("\nmonitor:\t%dx%dpx\n", int(monitor_width), int(monitor_height))
+	fmt.Printf("refresh rate:\t%dHz\n", int(refresh_rate))
+	fmt.Printf("window:\t\t%dx%dpx\n", int(window.Bounds().W()), int(window.Bounds().H()))
+	fmt.Printf("grid size:\t%dx%d\n", rows, cols)
+	fmt.Printf("turn rate:\t%d\n\n", turn_rate)
+
+	frame := 0
+	last_frame := frame
+	var t int64 = 0
+	var turn_accumulator int64 = 0
+	var turn_dt int64 = time.Second.Nanoseconds() / int64(turn_rate)
+	var title_accumulator int64 = 0
+	var title_dt int64 = time.Second.Nanoseconds()
+	last := time.Now()
+	for !window.Closed() {
+		now := time.Now()
+		frame_time := now.Sub(last).Nanoseconds()
+		last = now
+		turn_accumulator += frame_time
+		title_accumulator += frame_time
+
+		if window.JustPressed(pixelgl.KeyEscape) {
+			window.Destroy()
 			break
 		}
 
@@ -101,78 +100,88 @@ func run() {
 			init_grid()
 		}
 
-		if frame%fps == fps-1 {
-			curr_fps := float64(fps) * float64(time.Second) / float64(now.Sub(last))
-			last = now
+		win_width_now := window.Bounds().W()
+		win_height_now := window.Bounds().H()
+		if win_width != win_width_now || win_height != win_height_now {
+			fmt.Printf("window changed to %dx%d\n", int(win_width_now), int(win_height_now))
+			win_width = win_width_now
+			win_height = win_height_now
+			update_vertex_positions()
+		}
+
+		if title_accumulator >= title_dt {
+			curr_fps := float64(frame-last_frame) / time.Duration(title_accumulator).Seconds()
 			window.SetTitle("Life (" + strconv.FormatFloat(curr_fps, 'f', 2, 64) + " FPS)")
+			last_frame = frame
+			title_accumulator -= title_dt
 		}
 
-		window.Update()
-
-		if frame%fps%turn_rate == 0 {
+		if turn_accumulator >= turn_dt {
+			// fmt.Printf("turning %d\n", accumulator)
 			turn()
+			turn_accumulator -= turn_dt
+			t += turn_dt
 		}
 
-		draw(frame)
+		multiplier := float64(turn_accumulator) / float64(turn_dt)
+		// fmt.Printf("\tframe %d multiplier %f\n", frame, multiplier)
+		render(multiplier)
+		window.Update()
 		frame++
 	}
-	fmt.Printf("\nAvg turn time %s\n", time.Duration(totalLifeTime.Nanoseconds()/lifeCount))
-	fmt.Printf("\nAvg draw time %s\n", time.Duration(totalDrawTime.Nanoseconds()/drawCount))
+	fmt.Printf("\n%d frames drawn\n", frame)
+	fmt.Printf("Avg draw time %s\n", time.Duration(total_draw_time.Nanoseconds()/draws))
+	fmt.Printf("Avg turn time %s\n", time.Duration(total_turn_time.Nanoseconds()/turns))
+	fmt.Printf("Avg resize time %s\n", time.Duration(total_resize_time.Nanoseconds()/resizes))
 }
 
 func init_grid() {
-	diff = diff[:0]
-	for r := 0; r < rows; r++ {
-		for c := 0; c < cols; c++ {
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			cell := row*cols + col
 			is_alive := rand.Intn(3) == 0
-			grid[r*cols+c] = is_alive
-			if is_alive {
-				diff = append(diff, Vec2{
-					x: c,
-					y: r,
-				})
-			}
+			grid[cell] = is_alive
+			diff[cell] = is_alive
 		}
 	}
 }
 
 func turn() {
-	// defer func(start time.Time) {
-	// 	lifeCount++
-	// 	elapsed := time.Since(start)
-	// 	totalLifeTime += elapsed
-	// 	// fmt.Printf("life time %s\n", elapsed)
-	// }(time.Now())
+	defer func(start time.Time) {
+		turns++
+		total_turn_time += time.Since(start)
+	}(time.Now())
 
-	diff = diff[:0]
+	defer func() {
+		grid, buff = buff, grid
+	}()
 
-	for r := 0; r < rows; r++ {
-		for c := 0; c < cols; c++ {
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			r_up := row + 1
+			r_down := row - 1
+			c_left := col - 1
+			c_right := col + 1
 
-			r_up := r + 1
-			r_down := r - 1
-			c_left := c - 1
-			c_right := c + 1
-
-			if r == 0 {
+			if row == 0 {
 				r_down = rows - 1
 			}
-			if c == 0 {
+			if col == 0 {
 				c_left = cols - 1
 			}
-			if r == rows-1 {
+			if row == rows-1 {
 				r_up = 0
 			}
-			if c == cols-1 {
+			if col == cols-1 {
 				c_right = 0
 			}
 
 			r_up = r_up * cols
 			r_down = r_down * cols
-			r_same := r * cols
+			r_same := row * cols
 
 			var living_neighbors byte
-			if grid[r_up+c] {
+			if grid[r_up+col] {
 				living_neighbors++
 			}
 			if grid[r_up+c_right] {
@@ -184,7 +193,7 @@ func turn() {
 			if grid[r_down+c_right] {
 				living_neighbors++
 			}
-			if grid[r_down+c] {
+			if grid[r_down+col] {
 				living_neighbors++
 			}
 			if grid[r_down+c_left] {
@@ -197,107 +206,128 @@ func turn() {
 				living_neighbors++
 			}
 
-			i := r*cols + c
-			buff[i] = living_neighbors == 3 || (grid[i] && living_neighbors == 2)
-			if grid[i] != buff[i] {
-				diff = append(diff, Vec2{
-					x: c,
-					y: r,
-				})
-			}
+			cell := row*cols + col
+			buff[cell] = living_neighbors == 3 || (grid[cell] && living_neighbors == 2)
+			diff[cell] = grid[cell] != buff[cell]
 		}
 	}
-
-	grid, buff = buff, grid
 }
 
-func draw(frame int) {
+func render(multiplier float64) {
 	defer func(start time.Time) {
-		drawCount++
-		elapsed := time.Since(start)
-		totalDrawTime += elapsed
-		// fmt.Printf("draw time %s\n", elapsed)
+		draws++
+		total_draw_time += time.Since(start)
 	}(time.Now())
 
-	cells := diff
+	defer func() {
+		batch.Dirty()
+		batch.Draw(window)
+	}()
 
-	win_width := int(window.Bounds().Max.X)
-	win_height := int(window.Bounds().Max.Y)
-	if width != win_width || height != win_height {
-		picture = pixel.MakePictureData(window.Bounds())
-		width = win_width
-		height = win_height
-		cells = all
-		fmt.Printf("changed to %dx%d\n", width, height)
-	}
-
-	col_w := float64(width) / float64(cols)
-	row_h := float64(height) / float64(rows)
+	multiplier = math.Max(0.0, math.Min(1.0, 1.0/(1.0+math.Exp(-12.0*multiplier+6.0))))
+	// fmt.Printf("multiplier %f\n", multiplier)
 
 	alive_color := chartreuse
 	dead_color := black
+	alive_color_changing := pixel.RGBA{
+		R: alive_color.R * multiplier,
+		G: alive_color.G * multiplier,
+		B: alive_color.B * multiplier,
+		A: 1.0,
+	}
+	dead_color_changing := pixel.RGBA{
+		R: alive_color.R * (1.0 - multiplier),
+		G: alive_color.G * (1.0 - multiplier),
+		B: alive_color.B * (1.0 - multiplier),
+		A: 1.0,
+	}
 
-	// animate_turn := float64(frame%turn_rate) / float64(turn_rate-1)
-	// animate_turn = math.Max(0.0, math.Min(1.0, 1.0/(1.0+math.Exp(12.0*animate_turn-6.0))))
-	// animate_turn = math.Pow(animate_turn, 2.0)
-	// animate_turn = math.Pow(1.442695 * math.Log(animate_turn + 1), 0.25)
-	// animate_turn = math.Exp(animate_turn) / (math.Exp(animate_turn) + 1)
-	// if animate_turn < 0.5 {
-	// animate_turn = 2.0 * math.Pow(animate_turn, 2.0)
-	// } else {
-	// 	animate_turn = -2.0 * math.Pow(animate_turn-1.0, 2.0) + 1.0
-	// }
-
-	// cell_color := chartreuse
-	// alive_color := color.RGBA{
-	// 	R: uint8(float64(cell_color.R) * animate_turn),
-	// 	G: uint8(float64(cell_color.G) * animate_turn),
-	// 	B: uint8(float64(cell_color.B) * animate_turn),
-	// 	A: 255,
-	// }
-	// dead_color := color.RGBA{
-	// 	R: uint8(float64(cell_color.R) * (1.0 - animate_turn)),
-	// 	G: uint8(float64(cell_color.G) * (1.0 - animate_turn)),
-	// 	B: uint8(float64(cell_color.B) * (1.0 - animate_turn)),
-	// 	A: 255,
-	// }
-
-	for _, cell := range cells {
-		row := cell.y
-		col := cell.x
-
-		r_start := int(row_h * float64(row))
-		r_end := int(row_h * float64(row+1))
-		c_start := int(col_w * float64(col))
-		c_end := int(col_w * float64(col+1))
-
-		var cell_color color.RGBA
-		if grid[row*cols+col] {
-			cell_color = alive_color
+	for cell, did_change := range diff {
+		var color pixel.RGBA
+		if did_change {
+			if grid[cell] {
+				color = alive_color_changing
+			} else {
+				color = dead_color_changing
+			}
 		} else {
-			cell_color = dead_color
-		}
-
-		for y := r_start; y < r_end; y++ {
-			for x := c_start; x < c_end; x++ {
-				picture.Pix[y*picture.Stride+x] = cell_color
+			if grid[cell] {
+				color = alive_color
+			} else {
+				color = dead_color
 			}
 		}
+		for v := 0; v < 6; v++ {
+			triangles[cell*verts_per_cell+v].Color = color
+		}
 	}
-	sprite := pixel.NewSprite(picture, picture.Rect)
-	sprite.Draw(window, pixel.IM.Moved(window.Bounds().Center()))
 }
 
-var chartreuse color.RGBA = color.RGBA{
-	R: 128,
-	G: 255,
-	B: 0,
-	A: 255,
+func update_vertex_positions() {
+	defer func(start time.Time) {
+		resizes++
+		total_resize_time += time.Since(start)
+	}(time.Now())
+
+	defer func() {
+		batch.Dirty()
+	}()
+
+	row_height := win_height / float64(rows)
+	col_width := win_width / float64(cols)
+	for i := 0; i < rows; i++ {
+		row_start := i * verts_per_row
+		row_end := (i + 1) * verts_per_row
+		triangles[row_start].Position = pixel.Vec{
+			X: 0,
+			Y: float64(i) * row_height,
+		}
+		triangles[row_start+1].Position = pixel.Vec{
+			X: 0,
+			Y: float64(i+1) * row_height,
+		}
+		triangles[row_start+3].Position = triangles[row_start+1].Position
+
+		for j := 0; j < cols-1; j++ {
+			lower_vertex := pixel.Vec{
+				X: float64(j+1) * col_width,
+				Y: float64(i) * row_height,
+			}
+			triangles[row_start+j*verts_per_cell+2].Position = lower_vertex
+			triangles[row_start+j*verts_per_cell+4].Position = lower_vertex
+			triangles[row_start+j*verts_per_cell+6].Position = lower_vertex
+
+			upper_vertex := pixel.Vec{
+				X: float64(j+1) * col_width,
+				Y: float64(i+1) * row_height,
+			}
+			triangles[row_start+j*verts_per_cell+5].Position = upper_vertex
+			triangles[row_start+j*verts_per_cell+7].Position = upper_vertex
+			triangles[row_start+j*verts_per_cell+9].Position = upper_vertex
+		}
+
+		triangles[row_end-4].Position = pixel.Vec{
+			X: win_width,
+			Y: float64(i) * row_height,
+		}
+		triangles[row_end-2].Position = triangles[row_end-4].Position
+		triangles[row_end-1].Position = pixel.Vec{
+			X: win_width,
+			Y: float64(i+1) * row_height,
+		}
+	}
 }
 
-var black color.RGBA = color.RGBA{
-	R: 0,
-	G: 0,
-	B: 0,
-	A: 255,
+var chartreuse pixel.RGBA = pixel.RGBA{
+	R: 0.5,
+	G: 1.0,
+	B: 0.0,
+	A: 1.0,
+}
+
+var black pixel.RGBA = pixel.RGBA{
+	R: 0.0,
+	G: 0.0,
+	B: 0.0,
+	A: 1.0,
 }
