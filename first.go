@@ -12,11 +12,6 @@ import (
 	"github.com/faiface/pixel/pixelgl"
 )
 
-type Vec2 struct {
-	x int
-	y int
-}
-
 var (
 	turns, draws, resizes                               int64
 	total_turn_time, total_draw_time, total_resize_time time.Duration
