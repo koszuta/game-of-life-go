@@ -21,12 +21,14 @@ var (
 	win_width, win_height float64
 
 	rows, cols                    int
-	grid, buff, diff              []bool
+	grid, buff                    []bool
+	diff                          []int
 	verts_per_cell, verts_per_row int
 	triangles                     pixel.TrianglesData
 	batch                         *pixel.Batch
 
-	alive_colors, dead_colors []pixel.RGBA
+	alive_color pixel.RGBA = chartreuse
+	dead_color  pixel.RGBA = black
 )
 
 func main() {
@@ -62,7 +64,7 @@ func run() {
 
 	grid = make([]bool, rows*cols)
 	buff = make([]bool, rows*cols)
-	diff = make([]bool, rows*cols)
+	diff = make([]int, 0, rows*cols)
 	init_grid()
 
 	verts_per_cell = 2 * 3
@@ -87,9 +89,9 @@ func run() {
 	for !window.Closed() {
 		now := time.Now()
 		frame_time := now.Sub(last).Nanoseconds()
-		last = now
 		turn_accumulator += frame_time
 		title_accumulator += frame_time
+		last = now
 
 		if window.JustPressed(pixelgl.KeyEscape) {
 			window.Destroy()
@@ -97,7 +99,9 @@ func run() {
 		}
 
 		if window.JustPressed(pixelgl.KeySpace) {
+			clear_screen()
 			init_grid()
+			turn_accumulator = 0
 		}
 
 		win_width_now := window.Bounds().W()
@@ -117,18 +121,18 @@ func run() {
 		}
 
 		if turn_accumulator >= turn_dt {
-			// fmt.Printf("turning %d\n", accumulator)
+			set_cell_color()
 			turn()
 			turn_accumulator -= turn_dt
 			t += turn_dt
 		}
 
 		multiplier := float64(turn_accumulator) / float64(turn_dt)
-		// fmt.Printf("\tframe %d multiplier %f\n", frame, multiplier)
 		render(multiplier)
 		window.Update()
 		frame++
 	}
+
 	fmt.Printf("\n%d frames drawn\n", frame)
 	fmt.Printf("Avg draw time %s\n", time.Duration(total_draw_time.Nanoseconds()/draws))
 	fmt.Printf("Avg turn time %s\n", time.Duration(total_turn_time.Nanoseconds()/turns))
@@ -136,12 +140,33 @@ func run() {
 }
 
 func init_grid() {
-	for row := 0; row < rows; row++ {
-		for col := 0; col < cols; col++ {
-			cell := row*cols + col
-			is_alive := rand.Intn(3) == 0
-			grid[cell] = is_alive
-			diff[cell] = is_alive
+	diff = diff[:0]
+	for cell := 0; cell < rows*cols; cell++ {
+		grid[cell] = rand.Intn(3) == 0
+		if grid[cell] {
+			diff = append(diff, cell)
+		}
+	}
+}
+
+func clear_screen() {
+	for cell := 0; cell < rows*cols; cell++ {
+		for vert := 0; vert < verts_per_cell; vert++ {
+			triangles[cell*verts_per_cell+vert].Color = dead_color
+		}
+	}
+}
+
+func set_cell_color() {
+	for _, cell := range diff {
+		var color pixel.RGBA
+		if grid[cell] {
+			color = alive_color
+		} else {
+			color = dead_color
+		}
+		for vert := 0; vert < verts_per_cell; vert++ {
+			triangles[cell*verts_per_cell+vert].Color = color
 		}
 	}
 }
@@ -156,6 +181,7 @@ func turn() {
 		grid, buff = buff, grid
 	}()
 
+	diff = diff[:0]
 	for row := 0; row < rows; row++ {
 		for col := 0; col < cols; col++ {
 			r_up := row + 1
@@ -208,7 +234,9 @@ func turn() {
 
 			cell := row*cols + col
 			buff[cell] = living_neighbors == 3 || (grid[cell] && living_neighbors == 2)
-			diff[cell] = grid[cell] != buff[cell]
+			if grid[cell] != buff[cell] {
+				diff = append(diff, cell)
+			}
 		}
 	}
 }
@@ -226,9 +254,6 @@ func render(multiplier float64) {
 
 	multiplier = math.Max(0.0, math.Min(1.0, 1.0/(1.0+math.Exp(-12.0*multiplier+6.0))))
 	// fmt.Printf("multiplier %f\n", multiplier)
-
-	alive_color := chartreuse
-	dead_color := black
 	alive_color_changing := pixel.RGBA{
 		R: alive_color.R * multiplier,
 		G: alive_color.G * multiplier,
@@ -242,20 +267,12 @@ func render(multiplier float64) {
 		A: 1.0,
 	}
 
-	for cell, did_change := range diff {
+	for _, cell := range diff {
 		var color pixel.RGBA
-		if did_change {
-			if grid[cell] {
-				color = alive_color_changing
-			} else {
-				color = dead_color_changing
-			}
+		if grid[cell] {
+			color = alive_color_changing
 		} else {
-			if grid[cell] {
-				color = alive_color
-			} else {
-				color = dead_color
-			}
+			color = dead_color_changing
 		}
 		for v := 0; v < 6; v++ {
 			triangles[cell*verts_per_cell+v].Color = color
