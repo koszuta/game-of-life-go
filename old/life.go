@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"strconv"
 	"time"
 
@@ -12,29 +12,31 @@ import (
 	"github.com/faiface/pixel/pixelgl"
 )
 
+const lerpMag = 13.37
+
 var (
+	alive = pixel.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1.0} // white
+	// alive = pixel.RGBA{R: 0.5, G: 1.0, B: 0.0, A: 1.0} // chartreuse
+	// alive = pixel.RGBA{R: 0.5, G: 0.5, B: 1.0, A: 1.0} // purple
+	dead = pixel.RGBA{R: 0.0, G: 0.0, B: 0.0, A: 1.0} // black
+
 	turns, draws, animations, resizes           int64
 	turnTime, drawTime, animateTime, resizeTime time.Duration
 
 	turnRate            int
-	window              *pixelgl.Window
 	winWidth, winHeight float64
 
-	rows, cols                int
+	nRows, nCols              int
 	grid, buff                []bool
 	diff                      []int
 	vertsPerCell, vertsPerRow int
 	triangles                 pixel.TrianglesData
 	batch                     *pixel.Batch
-
-	aliveColor pixel.RGBA = chartreuse
-	deadColor  pixel.RGBA = black
 )
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
-	flag.IntVar(&rows, "rows", 100, "number of rows")
-	flag.IntVar(&cols, "cols", 100, "number of columns")
+	flag.IntVar(&nRows, "rows", 100, "number of rows")
+	flag.IntVar(&nCols, "cols", 100, "number of columns")
 	flag.IntVar(&turnRate, "rate", 12, "turns per second")
 	flag.Parse()
 	pixelgl.Run(run)
@@ -43,7 +45,8 @@ func main() {
 func run() {
 	monitorWidth, monitorHeight := pixelgl.PrimaryMonitor().Size()
 	refreshRate := pixelgl.PrimaryMonitor().RefreshRate()
-	win, err := pixelgl.NewWindow(pixelgl.WindowConfig{
+
+	window, err := pixelgl.NewWindow(pixelgl.WindowConfig{
 		Title:     "Life (" + strconv.FormatFloat(refreshRate, 'f', 2, 64) + " FPS)",
 		Bounds:    pixel.R(0, 0, 1000, 1000),
 		Resizable: true,
@@ -52,40 +55,37 @@ func run() {
 	if err != nil {
 		panic(err)
 	}
-	window = win
-	window.SetPos(pixel.Vec{
-		X: 1,
-		Y: 31,
-	})
 
 	if window.VSync() && turnRate > int(refreshRate) {
 		turnRate = int(refreshRate)
 	}
 
-	grid = make([]bool, rows*cols)
-	buff = make([]bool, rows*cols)
-	diff = make([]int, 0, rows*cols)
+	grid = make([]bool, nRows*nCols)
+	buff = make([]bool, nRows*nCols)
+	diff = make([]int, 0, nRows*nCols)
 	initGrid()
 
 	vertsPerCell = 2 * 3
-	vertsPerRow = vertsPerCell * cols
-	triangles = make(pixel.TrianglesData, vertsPerRow*rows)
+	vertsPerRow = vertsPerCell * nCols
+	triangles = make(pixel.TrianglesData, vertsPerRow*nRows)
 	batch = pixel.NewBatch(&triangles, nil)
 
-	fmt.Printf("\nmonitor:\t%dx%dpx\n", int(monitorWidth), int(monitorHeight))
-	fmt.Printf("refresh rate:\t%dHz\n", int(refreshRate))
-	fmt.Printf("window:\t\t%dx%dpx\n", int(window.Bounds().W()), int(window.Bounds().H()))
-	fmt.Printf("grid size:\t%dx%d\n", rows, cols)
-	fmt.Printf("turn rate:\t%d\n", turnRate)
-	fmt.Printf("polygons: \t%d\n\n", len(triangles)/3)
+	fmt.Println()
+	fmt.Printf("monitor:      %dx%dp\n", int(monitorWidth), int(monitorHeight))
+	fmt.Printf("refresh rate: %d Hz\n", int(refreshRate))
+	fmt.Printf("window:       %dx%dp\n", int(window.Bounds().W()), int(window.Bounds().H()))
+	fmt.Printf("grid size:    %dx%d\n", nRows, nCols)
+	fmt.Printf("turn rate:    %d\n", turnRate)
+	fmt.Printf("polygons:     %d\n\n", len(triangles)/3)
 
-	frame := 0
+	var (
+		frame            int
+		turnAccumulator  int64
+		titleAccumulator int64
+	)
+	dtTurn := time.Second.Nanoseconds() / int64(turnRate)
+	dtTitle := time.Second.Nanoseconds()
 	lastFrame := frame
-	var t int64 = 0
-	var turnAccumulator int64 = 0
-	var turnDt int64 = time.Second.Nanoseconds() / int64(turnRate)
-	var titleAccumulator int64 = 0
-	var titleDt int64 = time.Second.Nanoseconds()
 	last := time.Now()
 	for !window.Closed() {
 		now := time.Now()
@@ -114,28 +114,33 @@ func run() {
 			updateVertexPositions()
 		}
 
-		if titleAccumulator >= titleDt {
+		if titleAccumulator >= dtTitle {
 			currentFPS := float64(frame-lastFrame) / time.Duration(titleAccumulator).Seconds()
-			window.SetTitle("Life (" + strconv.FormatFloat(currentFPS, 'f', 2, 64) + " FPS)")
+			window.SetTitle("Life (" + strconv.FormatFloat(currentFPS, 'f', 2, 64) + " FPS) ")
 			lastFrame = frame
-			titleAccumulator -= titleDt
+			titleAccumulator -= dtTitle
 		}
 
-		if turnAccumulator >= turnDt {
+		if turnAccumulator >= dtTurn {
 			setCellColor()
 			turn()
-			turnAccumulator -= turnDt
-			t += turnDt
+			turnAccumulator -= dtTurn
 		}
 
-		multiplier := float64(turnAccumulator) / float64(turnDt)
+		multiplier := float64(turnAccumulator) / float64(dtTurn)
 		animate(multiplier)
-		render()
+
+		start := time.Now()
+		batch.Draw(window)
+		draws++
+		drawTime += time.Since(start)
+
 		window.Update()
 		frame++
 	}
 
-	fmt.Printf("\n%d frames drawn\n", frame)
+	fmt.Println()
+	fmt.Printf("%d frames drawn\n", frame)
 	fmt.Printf("Avg resize time %s\n", time.Duration(resizeTime.Nanoseconds()/resizes))
 	fmt.Printf("Avg turn time %s\n", time.Duration(turnTime.Nanoseconds()/turns))
 	fmt.Printf("Avg animate time %s\n", time.Duration(animateTime.Nanoseconds()/animations))
@@ -144,8 +149,8 @@ func run() {
 
 func initGrid() {
 	diff = diff[:0]
-	for cell := 0; cell < rows*cols; cell++ {
-		grid[cell] = rand.Intn(3) == 0
+	for cell := 0; cell < nRows*nCols; cell++ {
+		grid[cell] = rand.IntN(3) == 0
 		if grid[cell] {
 			diff = append(diff, cell)
 		}
@@ -153,9 +158,9 @@ func initGrid() {
 }
 
 func clearScreen() {
-	for cell := 0; cell < rows*cols; cell++ {
+	for cell := 0; cell < nRows*nCols; cell++ {
 		for vert := 0; vert < vertsPerCell; vert++ {
-			triangles[cell*vertsPerCell+vert].Color = deadColor
+			triangles[cell*vertsPerCell+vert].Color = dead
 		}
 	}
 }
@@ -164,9 +169,9 @@ func setCellColor() {
 	for _, cell := range diff {
 		var color pixel.RGBA
 		if grid[cell] {
-			color = aliveColor
+			color = alive
 		} else {
-			color = deadColor
+			color = dead
 		}
 		for vert := 0; vert < vertsPerCell; vert++ {
 			triangles[cell*vertsPerCell+vert].Color = color
@@ -180,34 +185,34 @@ func turn() {
 		turnTime += time.Since(start)
 	}(time.Now())
 
+	diff = diff[:0]
 	defer func() {
 		grid, buff = buff, grid
 	}()
 
-	diff = diff[:0]
-	for row := 0; row < rows; row++ {
-		for col := 0; col < cols; col++ {
+	for row := 0; row < nRows; row++ {
+		for col := 0; col < nCols; col++ {
 			rowUp := row + 1
 			rowDown := row - 1
 			colLeft := col - 1
 			colRight := col + 1
 
 			if row == 0 {
-				rowDown = rows - 1
+				rowDown = nRows - 1
 			}
 			if col == 0 {
-				colLeft = cols - 1
+				colLeft = nCols - 1
 			}
-			if row == rows-1 {
+			if row == nRows-1 {
 				rowUp = 0
 			}
-			if col == cols-1 {
+			if col == nCols-1 {
 				colRight = 0
 			}
 
-			rowUp = rowUp * cols
-			rowDown = rowDown * cols
-			rowSame := row * cols
+			rowUp = rowUp * nCols
+			rowDown = rowDown * nCols
+			rowSame := row * nCols
 
 			var livingNeighbors byte
 			if grid[rowUp+col] {
@@ -235,7 +240,7 @@ func turn() {
 				livingNeighbors++
 			}
 
-			cell := row*cols + col
+			cell := row*nCols + col
 			buff[cell] = livingNeighbors == 3 || (grid[cell] && livingNeighbors == 2)
 			if grid[cell] != buff[cell] {
 				diff = append(diff, cell)
@@ -244,16 +249,7 @@ func turn() {
 	}
 }
 
-func render() {
-	defer func(start time.Time) {
-		draws++
-		drawTime += time.Since(start)
-	}(time.Now())
-
-	batch.Draw(window)
-}
-
-func animate(multiplier float64) {
+func animate(m float64) {
 	defer func(start time.Time) {
 		animations++
 		animateTime += time.Since(start)
@@ -263,26 +259,15 @@ func animate(multiplier float64) {
 		batch.Dirty()
 	}()
 
-	multiplier = math.Max(0.0, math.Min(1.0, 1.0/(1.0+math.Exp(-12.0*multiplier+6.0))))
-	aliveColorChanging := pixel.RGBA{
-		R: aliveColor.R * multiplier,
-		G: aliveColor.G * multiplier,
-		B: aliveColor.B * multiplier,
-		A: 1.0,
-	}
-	deadColorChanging := pixel.RGBA{
-		R: aliveColor.R * (1.0 - multiplier),
-		G: aliveColor.G * (1.0 - multiplier),
-		B: aliveColor.B * (1.0 - multiplier),
-		A: 1.0,
-	}
+	aliveFade := lerp(dead, alive, m)
+	deadFade := lerp(alive, dead, m)
 
 	for _, cell := range diff {
 		var color pixel.RGBA
 		if grid[cell] {
-			color = aliveColorChanging
+			color = aliveFade
 		} else {
-			color = deadColorChanging
+			color = deadFade
 		}
 		for v := 0; v < 6; v++ {
 			triangles[cell*vertsPerCell+v].Color = color
@@ -300,9 +285,9 @@ func updateVertexPositions() {
 		batch.Dirty()
 	}()
 
-	rowHeight := winHeight / float64(rows)
-	colWidth := winWidth / float64(cols)
-	for i := 0; i < rows; i++ {
+	rowHeight := winHeight / float64(nRows)
+	colWidth := winWidth / float64(nCols)
+	for i := 0; i < nRows; i++ {
 		rowStart := i * vertsPerRow
 		rowEnd := (i + 1) * vertsPerRow
 		triangles[rowStart].Position = pixel.Vec{
@@ -315,22 +300,24 @@ func updateVertexPositions() {
 		}
 		triangles[rowStart+3].Position = triangles[rowStart+1].Position
 
-		for j := 0; j < cols-1; j++ {
+		for j := 0; j < nCols-1; j++ {
+			d := rowStart + j*vertsPerCell
+
 			lowerVertex := pixel.Vec{
 				X: float64(j+1) * colWidth,
 				Y: float64(i) * rowHeight,
 			}
-			triangles[rowStart+j*vertsPerCell+2].Position = lowerVertex
-			triangles[rowStart+j*vertsPerCell+4].Position = lowerVertex
-			triangles[rowStart+j*vertsPerCell+6].Position = lowerVertex
+			triangles[d+2].Position = lowerVertex
+			triangles[d+4].Position = lowerVertex
+			triangles[d+6].Position = lowerVertex
 
 			upperVertex := pixel.Vec{
 				X: float64(j+1) * colWidth,
 				Y: float64(i+1) * rowHeight,
 			}
-			triangles[rowStart+j*vertsPerCell+5].Position = upperVertex
-			triangles[rowStart+j*vertsPerCell+7].Position = upperVertex
-			triangles[rowStart+j*vertsPerCell+9].Position = upperVertex
+			triangles[d+5].Position = upperVertex
+			triangles[d+7].Position = upperVertex
+			triangles[d+9].Position = upperVertex
 		}
 
 		triangles[rowEnd-4].Position = pixel.Vec{
@@ -345,16 +332,13 @@ func updateVertexPositions() {
 	}
 }
 
-var chartreuse pixel.RGBA = pixel.RGBA{
-	R: 0.5,
-	G: 1.0,
-	B: 0.0,
-	A: 1.0,
-}
-
-var black pixel.RGBA = pixel.RGBA{
-	R: 0.0,
-	G: 0.0,
-	B: 0.0,
-	A: 1.0,
+func lerp(a, b pixel.RGBA, t float64) pixel.RGBA {
+	// 1/1+e^-2*mag*t+mag clamped to [0,1]
+	t = math.Max(0.0, math.Min(1.0, 1.0/(1.0+math.Exp(-2.0*lerpMag*t+lerpMag))))
+	return pixel.RGBA{
+		R: a.R + (b.R-a.R)*t,
+		G: a.G + (b.G-a.G)*t,
+		B: a.B + (b.B-a.B)*t,
+		A: a.A + (b.A-a.A)*t,
+	}
 }
