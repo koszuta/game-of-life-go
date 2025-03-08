@@ -11,11 +11,10 @@ import (
 func main() {
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	game := life.NewOldLife(life.Conf{
-		// game := life.NewMapLife(life.Conf{
 		WindowHeight: 1000,
 		WindowWidth:  1000,
-		NRows:        1000,
-		NCols:        1000,
+		NRows:        500,
+		NCols:        500,
 		TPS:          12,
 	})
 	if err := ebiten.RunGame(game); err != nil {

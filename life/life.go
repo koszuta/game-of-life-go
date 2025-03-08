@@ -34,7 +34,7 @@ func newVert(x, y int, xScale, yScale float32, c color.RGBA) ebiten.Vertex {
 }
 
 var (
-	debug = false
+	debug = true
 
 	updates = make([]time.Duration, n)
 	iUpdate int

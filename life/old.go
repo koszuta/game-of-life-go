@@ -14,11 +14,8 @@ import (
 type OldLife struct {
 	nRows int
 	nCols int
-
-	grid []bool
-	diff []int
-
-	vertices []ebiten.Vertex
+	grid  []bool
+	diff  []int
 }
 
 func NewOldLife(conf Conf) *OldLife {
@@ -30,43 +27,32 @@ func NewOldLife(conf Conf) *OldLife {
 
 	nRows, nCols := conf.NRows, conf.NCols
 	l := &OldLife{
-		nRows:    nRows,
-		nCols:    nCols,
-		grid:     make([]bool, nRows*nCols),
-		vertices: make([]ebiten.Vertex, 0, (nRows+1)*(nCols+1)),
-	}
-	xScale, yScale := l.cellScale()
-	for y := range nRows + 1 {
-		for x := range nCols + 1 {
-			l.vertices = append(l.vertices, newVert(x, y, xScale, yScale, chartreuse))
-		}
+		nRows: nRows,
+		nCols: nCols,
+		grid:  make([]bool, nRows*nCols),
 	}
 	l.Reset()
 	return l
 }
 
-func (l *OldLife) cellScale() (x, y float32) {
-	w, h := ebiten.WindowSize()
-	return float32(w) / float32(l.nCols), float32(h) / float32(l.nRows)
-}
-
-func (l *OldLife) Update() error {
+func (life *OldLife) Update() error {
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		return ebiten.Termination
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
-		l.Reset()
+		life.Reset()
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyD) {
+	if inpututil.IsKeyJustPressed(ebiten.KeyF1) {
 		debug = !debug
 	}
 
-	l.Step()
+	life.Step()
 
 	return nil
 }
 
-func (l *OldLife) Draw(screen *ebiten.Image) {
+func (life *OldLife) Draw(screen *ebiten.Image) {
+	var nDrawn time.Duration
 	if debug {
 		defer func() {
 			var tDraws, nDraws time.Duration
@@ -85,9 +71,10 @@ func (l *OldLife) Draw(screen *ebiten.Image) {
 			}
 			avgUpdate := (tUpdates / nUpdates).Round(10 * time.Microsecond)
 			avgDraw := (tDraws / nDraws).Round(10 * time.Microsecond)
+			perCell := tDraws / nDraws / nDrawn
 			ebitenutil.DebugPrint(screen,
-				fmt.Sprintf("TPS: %.1f\tFPS: %.1f\tUpdate took %v\tDraw took %v",
-					ebiten.ActualTPS(), ebiten.ActualFPS(), avgUpdate, avgDraw))
+				fmt.Sprintf("TPS: %.1f\tFPS: %.1f\tUpdate took %v\tDraw took %v\tPer cell took %v",
+					ebiten.ActualTPS(), ebiten.ActualFPS(), avgUpdate, avgDraw, perCell))
 		}()
 	}
 	defer func(start time.Time) {
@@ -97,20 +84,18 @@ func (l *OldLife) Draw(screen *ebiten.Image) {
 
 	screen.Fill(black)
 
-	vertices := make([]ebiten.Vertex, 0, math.MaxUint16)
-	indices := make([]uint16, 0)
+	vertices := make([]ebiten.Vertex, 0, int(math.Pow(2, 10)))
+	indices := make([]uint16, 0, cap(vertices)/4*6) // 6 indices per 4 vertices
 
 	w, h := ebiten.WindowSize()
-	xScale, yScale := float32(w)/float32(l.nCols), float32(h)/float32(l.nRows)
-	for i, alive := range l.grid {
+	xScale, yScale := float32(w)/float32(life.nCols), float32(h)/float32(life.nRows)
+	for i, alive := range life.grid {
 		if !alive {
 			continue
 		}
-		if len(vertices)+4 >= math.MaxUint16 {
-			screen.DrawTriangles(vertices, indices, whiteSubImage, nil)
-			vertices, indices = vertices[:0], indices[:0]
-		}
-		x, y := l.deindex(i)
+		nDrawn++
+
+		x, y := life.deindex(i)
 		vertices = append(vertices,
 			newVert(x, y, xScale, yScale, chartreuse),     // upper left
 			newVert(x+1, y, xScale, yScale, chartreuse),   // upper right
@@ -119,99 +104,131 @@ func (l *OldLife) Draw(screen *ebiten.Image) {
 		)
 		j := uint16(len(vertices) - 1)
 		indices = append(indices, j-3, j-1, j-2, j-2, j-1, j)
+
+		if len(vertices)+4 >= cap(vertices) {
+			screen.DrawTriangles(vertices, indices, whiteSubImage, nil)
+			vertices, indices = vertices[:0], indices[:0]
+		}
 	}
 	screen.DrawTriangles(vertices, indices, whiteSubImage, nil)
 }
 
-func (l *OldLife) deindex(i int) (x, y int) {
-	return i % l.nCols, i / l.nCols
+func (life *OldLife) deindex(i int) (x, y int) {
+	return i % life.nCols, i / life.nCols
 }
 
-func (l *OldLife) Layout(h, w int) (int, int) {
-	return h, w
+func (life *OldLife) Layout(w, h int) (int, int) {
+	return w, h
 }
 
-func (l *OldLife) Reset() {
+func (life *OldLife) Reset() {
 	clear(updates)
 	clear(draws)
 
-	l.diff = l.diff[:0]
-	for cell := range l.nRows * l.nCols {
-		l.grid[cell] = rand.IntN(3) == 0
-		if l.grid[cell] {
-			l.diff = append(l.diff, cell)
+	life.diff = life.diff[:0]
+	for i := range life.nRows * life.nCols {
+		alive := rand.IntN(100) < n
+		life.grid[i] = alive
+		if alive {
+			life.diff = append(life.diff, i)
 		}
 	}
 }
 
-func (l *OldLife) Step() {
+func (life *OldLife) Step() {
 	defer func(start time.Time) {
 		updates[iUpdate] = time.Since(start)
 		iUpdate = (iUpdate + 1) % n
 	}(time.Now())
 
-	next := make([]bool, len(l.grid))
+	l := len(life.grid)
+	buff := make([]bool, l)
 	defer func() {
-		l.grid = next
+		life.grid = buff
 	}()
 
-	l.diff = l.diff[:0]
-	for row := range l.nRows {
-		for col := range l.nCols {
-			rowUp := row + 1
-			rowDown := row - 1
-			colLeft := col - 1
-			colRight := col + 1
+	life.diff = life.diff[:0]
+	for i := range life.nRows * life.nCols {
+		var neighbors int
+		{ // upper left
+			j := i - life.nCols - 1
+			if j < 0 {
+				j += l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
+		{ // upper center
+			j := i - life.nCols
+			if j < 0 {
+				j += l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
+		{ // upper right
+			j := i - life.nCols + 1
+			if j < 0 {
+				j += l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
+		{ // left
+			j := i - 1
+			if j < 0 {
+				j += l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
+		{ // right
+			j := i + 1
+			if j >= l {
+				j -= l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
+		{ // lower left
+			j := i + life.nCols - 1
+			if j >= l {
+				j -= l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
+		{ // lower center
+			j := i + life.nCols
+			if j >= l {
+				j -= l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
+		{ // lower right
+			j := i + life.nCols + 1
+			if j >= l {
+				j -= l
+			}
+			if life.grid[j] {
+				neighbors++
+			}
+		}
 
-			if row == 0 {
-				rowDown = l.nRows - 1
-			}
-			if col == 0 {
-				colLeft = l.nCols - 1
-			}
-			if row == l.nRows-1 {
-				rowUp = 0
-			}
-			if col == l.nCols-1 {
-				colRight = 0
-			}
+		wasAlive := life.grid[i]
+		nowAlive := neighbors == 3 || (wasAlive && neighbors == 2)
 
-			rowUp = rowUp * l.nCols
-			rowDown = rowDown * l.nCols
-			rowSame := row * l.nCols
-
-			var livingNeighbors int
-			if l.grid[rowUp+col] {
-				livingNeighbors++
-			}
-			if l.grid[rowUp+colRight] {
-				livingNeighbors++
-			}
-			if l.grid[rowSame+colRight] {
-				livingNeighbors++
-			}
-			if l.grid[rowDown+colRight] {
-				livingNeighbors++
-			}
-			if l.grid[rowDown+col] {
-				livingNeighbors++
-			}
-			if l.grid[rowDown+colLeft] {
-				livingNeighbors++
-			}
-			if l.grid[rowSame+colLeft] {
-				livingNeighbors++
-			}
-			if l.grid[rowUp+colLeft] {
-				livingNeighbors++
-			}
-
-			cell := row*l.nCols + col
-			alive := livingNeighbors == 3 || (l.grid[cell] && livingNeighbors == 2)
-			next[cell] = alive
-			if l.grid[cell] != alive {
-				l.diff = append(l.diff, cell)
-			}
+		buff[i] = nowAlive
+		if wasAlive != nowAlive {
+			life.diff = append(life.diff, i)
 		}
 	}
 }
